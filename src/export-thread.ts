@@ -15,6 +15,7 @@ import type {
   DiscordChannel,
   ExportMetadata,
   ExportSummary,
+  MessageSelection,
   NormalizedMessage,
 } from "./types.js";
 
@@ -24,6 +25,9 @@ export interface ExportThreadOptions {
   threadUrl?: string;
   threadId?: string;
   includeMarkdown?: boolean;
+  afterMessageId?: string;
+  beforeMessageId?: string;
+  includeBoundaryMessages?: boolean;
   token?: string;
   allowedGuildIds?: string;
   outputRoot?: string;
@@ -35,6 +39,7 @@ export interface ExportThreadOptions {
 export async function exportThread(
   options: ExportThreadOptions,
 ): Promise<ExportSummary> {
+  validateSelectionOptions(options);
   const allowed = parseAllowedGuildIds(
     options.allowedGuildIds ?? process.env.DISCORD_ALLOWED_GUILD_IDS,
   );
@@ -76,11 +81,17 @@ export async function exportThread(
     pageCount = fetched.pageCount;
     retryCount = fetched.retryCount;
     const messages = fetched.messages.map((message) => normalizeMessage(message));
-    const warnings = collectWarnings(messages);
+    const selectedMessages = hasSelection(options)
+      ? selectMessages(messages, options)
+      : null;
+    const selection = selectedMessages
+      ? createSelectionMetadata(messages, selectedMessages, options)
+      : null;
+    const warnings = collectWarnings(messages, options);
     const oldest = messages[0]?.created_at ?? null;
     const newest = messages.at(-1)?.created_at ?? null;
     const metadata: ExportMetadata = {
-      format_version: 2,
+      format_version: 3,
       status: "complete",
       exported_at: exportedAt,
       guild_id: guildId,
@@ -92,11 +103,21 @@ export async function exportThread(
       api_page_count: pageCount,
       retry_count: client?.retryCount ?? retryCount,
       warnings,
+      selection,
     };
 
     const jsonlPath = path.join(exportDirectory, "messages.jsonl");
     const rawJsonlPath = path.join(exportDirectory, "raw-messages.jsonl");
     const markdownPath = path.join(exportDirectory, "thread.md");
+    const selectedJsonlPath = selectedMessages
+      ? path.join(exportDirectory, "selected-messages.jsonl")
+      : null;
+    const selectedMarkdownPath = selectedMessages
+      ? path.join(exportDirectory, "selected-thread.md")
+      : null;
+    const selectionMetadataPath = selectedMessages
+      ? path.join(exportDirectory, "selection-metadata.json")
+      : null;
     await writeAtomic(
       jsonlPath,
       messages.map((message) => JSON.stringify(message)).join("\n") +
@@ -113,6 +134,23 @@ export async function exportThread(
         renderThreadMarkdown(channel.name ?? threadId, messages),
       );
     }
+    if (selectedMessages && selectedJsonlPath && selectionMetadataPath && selection) {
+      await writeAtomic(
+        selectedJsonlPath,
+        selectedMessages.map((message) => JSON.stringify(message)).join("\n") +
+          (selectedMessages.length > 0 ? "\n" : ""),
+      );
+      if (options.includeMarkdown !== false && selectedMarkdownPath) {
+        await writeAtomic(
+          selectedMarkdownPath,
+          renderThreadMarkdown(`${channel.name ?? threadId} — selected range`, selectedMessages),
+        );
+      }
+      await writeAtomic(
+        selectionMetadataPath,
+        `${JSON.stringify(selection, null, 2)}\n`,
+      );
+    }
     await writeAtomic(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
 
     return {
@@ -127,6 +165,18 @@ export async function exportThread(
       raw_jsonl_path: rawJsonlPath,
       markdown_path: options.includeMarkdown === false ? null : markdownPath,
       metadata_path: metadataPath,
+      selected_message_count: selectedMessages?.length ?? null,
+      selected_jsonl_path: selectedJsonlPath,
+      selected_markdown_path:
+        selectedMessages && options.includeMarkdown !== false
+          ? selectedMarkdownPath
+          : null,
+      selection_metadata_path: selectionMetadataPath,
+      analysis_jsonl_path: selectedJsonlPath ?? jsonlPath,
+      analysis_markdown_path:
+        options.includeMarkdown === false
+          ? null
+          : (selectedMarkdownPath ?? markdownPath),
       warnings,
     };
   } catch (error) {
@@ -137,7 +187,7 @@ export async function exportThread(
             cause: error,
           });
     const incomplete: ExportMetadata = {
-      format_version: 2,
+      format_version: 3,
       status: "incomplete",
       exported_at: exportedAt,
       guild_id: guildId,
@@ -149,6 +199,7 @@ export async function exportThread(
       api_page_count: pageCount,
       retry_count: retryCount,
       warnings: [],
+      selection: null,
       error: { code: exportError.code, message: exportError.message },
     };
     try {
@@ -177,14 +228,100 @@ function validateChannel(
   }
 }
 
-function collectWarnings(messages: readonly NormalizedMessage[]): string[] {
+function collectWarnings(
+  messages: readonly NormalizedMessage[],
+  options: ExportThreadOptions,
+): string[] {
   const warnings: string[] = [];
   if (messages.some((message) => !message.content && message.type === 0)) {
     warnings.push(
       "One or more standard messages have empty content. Check Message Content Intent or inspect their attachments/embeds.",
     );
   }
+  const ids = new Set(messages.map((message) => message.id));
+  if (options.afterMessageId && !ids.has(options.afterMessageId)) {
+    warnings.push(
+      "The after_message_id was not present in the complete export; the Snowflake boundary was still applied.",
+    );
+  }
+  if (options.beforeMessageId && !ids.has(options.beforeMessageId)) {
+    warnings.push(
+      "The before_message_id was not present in the complete export; the Snowflake boundary was still applied.",
+    );
+  }
   return warnings;
+}
+
+function validateSelectionOptions(options: ExportThreadOptions): void {
+  for (const [name, value] of [
+    ["after_message_id", options.afterMessageId],
+    ["before_message_id", options.beforeMessageId],
+  ] as const) {
+    if (value !== undefined && !/^\d+$/.test(value)) {
+      throw new ExportError(
+        "INVALID_SELECTION",
+        `${name} must be a Discord message ID.`,
+      );
+    }
+  }
+  if (
+    options.afterMessageId &&
+    options.beforeMessageId &&
+    BigInt(options.afterMessageId) >= BigInt(options.beforeMessageId)
+  ) {
+    throw new ExportError(
+      "INVALID_SELECTION",
+      "after_message_id must be older than before_message_id.",
+    );
+  }
+  if (
+    options.includeBoundaryMessages &&
+    !options.afterMessageId &&
+    !options.beforeMessageId
+  ) {
+    throw new ExportError(
+      "INVALID_SELECTION",
+      "include_boundary_messages requires a message boundary.",
+    );
+  }
+}
+
+function hasSelection(options: ExportThreadOptions): boolean {
+  return Boolean(options.afterMessageId || options.beforeMessageId);
+}
+
+function selectMessages(
+  messages: readonly NormalizedMessage[],
+  options: ExportThreadOptions,
+): NormalizedMessage[] {
+  const after = options.afterMessageId ? BigInt(options.afterMessageId) : null;
+  const before = options.beforeMessageId ? BigInt(options.beforeMessageId) : null;
+  const includeBoundaries = options.includeBoundaryMessages === true;
+
+  return messages.filter((message) => {
+    const id = BigInt(message.id);
+    const passesAfter =
+      after === null || (includeBoundaries ? id >= after : id > after);
+    const passesBefore =
+      before === null || (includeBoundaries ? id <= before : id < before);
+    return passesAfter && passesBefore;
+  });
+}
+
+function createSelectionMetadata(
+  sourceMessages: readonly NormalizedMessage[],
+  selectedMessages: readonly NormalizedMessage[],
+  options: ExportThreadOptions,
+): MessageSelection {
+  return {
+    after_message_id: options.afterMessageId ?? null,
+    before_message_id: options.beforeMessageId ?? null,
+    include_boundary_messages: options.includeBoundaryMessages === true,
+    source_message_count: sourceMessages.length,
+    message_count: selectedMessages.length,
+    oldest_message_at: selectedMessages[0]?.created_at ?? null,
+    newest_message_at: selectedMessages.at(-1)?.created_at ?? null,
+  };
 }
 
 async function writeAtomic(destination: string, content: string): Promise<void> {

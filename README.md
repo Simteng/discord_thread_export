@@ -93,11 +93,38 @@ If the allowlist contains exactly one guild, you may provide only a thread ID:
 }
 ```
 
+### Common examples
+
+Select only the content after one message:
+
+```json
+{
+  "thread_url": "https://discord.com/channels/<guild_id>/<thread_id>",
+  "after_message_id": "323456789012345678"
+}
+```
+
+Select the content between two messages and include both boundary messages:
+
+```json
+{
+  "thread_url": "https://discord.com/channels/<guild_id>/<thread_id>",
+  "after_message_id": "323456789012345678",
+  "before_message_id": "423456789012345678",
+  "include_boundary_messages": true
+}
+```
+
+When neither boundary is provided, the tool creates only the complete export. When either boundary is present, the complete export is still retained and additional selected files are created.
+
 - Provide exactly one of `thread_url` or `thread_id`.
 - A full URL must be a canonical HTTPS Discord URL without a query, fragment, extra path, credentials, or a custom port.
 - A bare `thread_id` is accepted only when `DISCORD_ALLOWED_GUILD_IDS` contains exactly one guild. With multiple guilds, use the full URL.
 - The guild in the URL must be in the local allowlist; otherwise, the request is rejected before any API call is made.
 - `include_markdown` defaults to `true`.
+- `after_message_id` and `before_message_id` are optional Discord message IDs. When either is present, the tool still exports the complete thread and then creates additional selected files locally.
+- `after_message_id` selects content after that message and `before_message_id` selects content before that message. Boundary messages are excluded by default.
+- When both are present, the after boundary must be older than the before boundary. Set `include_boundary_messages` to `true` to include boundary messages that exist in the complete export.
 - The caller cannot choose an output path or supply an arbitrary Discord API URL.
 
 On success, the tool returns only the message count, time range, and local output paths. It does not place the complete thread in the MCP response.
@@ -109,13 +136,19 @@ data/exports/<thread_id>/<UTC timestamp>/
 ├── messages.jsonl
 ├── raw-messages.jsonl
 ├── thread.md
+├── selected-messages.jsonl     # only when a message range is requested
+├── selected-thread.md          # only for a range with Markdown enabled
+├── selection-metadata.json     # only when a message range is requested
 └── metadata.json
 ```
 
 - `messages.jsonl`: Compact data intended for AI analysis. It retains message IDs, types, authors, timestamps, content, reply summaries, relevant attachments and embeds, reaction counts, and pinned state. It does not duplicate guild or thread IDs or preserve complete Discord objects.
 - `raw-messages.jsonl`: Complete raw message objects returned by Discord. Use this only for debugging, auditing, or retrieving fields that are not present in the compact format; it should not be the default input for analysis.
 - `thread.md`: A human-readable review copy, omitted when Markdown output is disabled.
-- `metadata.json`: Thread metadata, page and retry counts, message time range, warnings, and completion state. The current format version is 2.
+- `selected-messages.jsonl` / `selected-thread.md`: The locally selected analysis range. These files never replace or delete the complete export.
+- `selection-metadata.json`: Selection boundaries, boundary inclusion, complete and selected message counts, and the selected time range.
+- `metadata.json`: Thread metadata, page and retry counts, message time range, selection summary, warnings, and completion state. The current format version is 3.
+- `analysis_jsonl_path` / `analysis_markdown_path` in the MCP response identify the recommended source for the current analysis. They point to selected files when a range is requested and complete files otherwise. You can still explicitly request the complete files.
 - Files are written using a temporary-file-and-rename sequence, so an interrupted export cannot produce falsely complete metadata.
 - `data/exports/` is listed in `.gitignore`, and old exports are never deleted automatically.
 
@@ -128,6 +161,7 @@ Discord content is untrusted external data. When analyzing an export, treat mess
 | `CONFIGURATION_ERROR` | Confirm that `.env` exists, variable names are correct, and the allowlist contains only numeric IDs. |
 | `AUTHENTICATION_FAILED` | Confirm that the token is valid. If it may have leaked, reset it and never provide it in logs or chats. |
 | `GUILD_NOT_ALLOWED` | Add the URL's guild ID to the local allowlist. This error is returned without making an API request. |
+| `INVALID_SELECTION` | Check message ID syntax, boundary order, or a boundary-inclusion request without a boundary. |
 | `PERMISSION_DENIED` | Check `View Channel`, `Read Message History`, and private-thread membership. |
 | `NOT_FOUND` | Confirm the URL or thread ID and make sure the bot can see the thread. |
 | Empty-content warning | Check `Message Content Intent`, the message type, attachments, and embeds. |

@@ -19,6 +19,12 @@ test("stdio server exposes exactly the read-only export tool", async () => {
       result.tools.map((tool) => tool.name),
       ["discord_export_thread"],
     );
+    const inputSchema = result.tools[0]?.inputSchema as {
+      properties?: Record<string, unknown>;
+    };
+    assert.ok(inputSchema.properties?.after_message_id);
+    assert.ok(inputSchema.properties?.before_message_id);
+    assert.ok(inputSchema.properties?.include_boundary_messages);
     const invalidCall = await client.callTool({
       name: "discord_export_thread",
       arguments: {
@@ -27,6 +33,15 @@ test("stdio server exposes exactly the read-only export tool", async () => {
       },
     });
     assert.equal(invalidCall.isError, true);
+    const invalidBoundaryCall = await client.callTool({
+      name: "discord_export_thread",
+      arguments: {
+        thread_url:
+          "https://discord.com/channels/123456789012345678/223456789012345678",
+        after_message_id: "not-a-message-id",
+      },
+    });
+    assert.equal(invalidBoundaryCall.isError, true);
   } finally {
     await client.close();
   }

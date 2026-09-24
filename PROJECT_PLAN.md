@@ -1,8 +1,8 @@
 # Discord 討論串唯讀匯出 MCP：專案計畫
 
 > 文件狀態：已於 2026-09-17 獲使用者核准  
-> 執行狀態：階段 A–D 已完成；等待本機憑證與測試討論串以執行階段 E  
-> 最後更新：2026-09-17
+> 執行狀態：階段 A–D 與階段 F「本機訊息區間選取」已完成；階段 E 實際 Discord 驗證仍需另行執行
+> 最後更新：2026-09-24
 
 ## 1. 專案摘要
 
@@ -469,3 +469,48 @@ Discord 訊息屬於不受信任的外部資料。訊息中即使包含「忽略
 - [Discord Permissions](https://docs.discord.com/developers/topics/permissions)
 - [Discord Gateway Intents／Message Content Intent](https://docs.discord.com/developers/events/gateway)
 - [OpenAI API：MCP tools 與 custom tools](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+
+## 19. 階段 F：完整匯出後的本機訊息區間選取
+
+### 19.1 背景與決策
+
+使用者有時需要分析完整討論串，有時只需要指定訊息之後或兩則訊息之間的內容。此次採用「完整匯出保留，再於本機切割」：Discord API 仍完整讀取 allowlist 內的討論串，既有完整 JSONL、原始 JSONL、Markdown 與 metadata 都不移除；只有在呼叫者提供訊息邊界時，才額外產生較小的分析檔案。
+
+這項設計將 Discord 資料取得與模型上下文控制分開。同一份完整匯出可供人工檢閱及完整分析，選取檔案則避免無關訊息進入當次模型分析。選取完全在本機進行，不新增 Discord 寫入能力，也不把訊息內容直接放進 MCP response。
+
+### 19.2 工具介面
+
+`discord_export_thread` 新增三個選填參數：
+
+| 欄位 | 說明 |
+|---|---|
+| `after_message_id` | 選取此訊息之後的訊息；預設不含邊界 |
+| `before_message_id` | 選取此訊息之前的訊息；預設不含邊界 |
+| `include_boundary_messages` | 設為 `true` 時包含存在於完整匯出中的邊界訊息 |
+
+未提供任何訊息邊界時，行為保持不變。若同時提供兩個邊界，`after_message_id` 必須早於 `before_message_id`。邊界 ID 不存在於完整匯出時仍可作為 Discord Snowflake 時序邊界使用，但 metadata 會留下警告。
+
+### 19.3 輸出與分析路徑
+
+指定範圍時額外建立：
+
+```text
+selected-messages.jsonl
+selected-thread.md            # include_markdown=false 時省略
+selection-metadata.json
+```
+
+完整檔案仍使用原檔名並保留。MCP summary 新增 `analysis_jsonl_path` 與 `analysis_markdown_path`：有選取範圍時指向選取檔，沒有範圍時指向完整檔。這只是當次分析的預設路徑，不禁止使用者或模型在明確要求下讀取完整檔案。
+
+### 19.4 實作與驗收清單
+
+- [x] 擴充 MCP input/output schema，保留既有欄位相容性。
+- [x] 完整匯出後依 Snowflake ID 在本機篩選，支援單側及雙側邊界。
+- [x] 支援包含或排除邊界訊息。
+- [x] 產生選取 JSONL、選取 Markdown 與 selection metadata。
+- [x] 讓 `analysis_*_path` 在完整與選取模式間正確切換。
+- [x] 驗證錯誤邊界順序不會呼叫 Discord API。
+- [x] 補齊自動化測試及中英文 README。
+- [x] 通過 TypeScript check、全部 mock tests 與 build（33 項測試）。
+
+本階段不執行真實 Discord 匯出；實際 API 整合驗證仍沿用階段 E 的權限與核准界線。

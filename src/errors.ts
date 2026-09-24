@@ -1,5 +1,6 @@
 export type ExportErrorCode =
   | "INVALID_URL"
+  | "INVALID_SELECTION"
   | "GUILD_NOT_ALLOWED"
   | "CONFIGURATION_ERROR"
   | "AUTHENTICATION_FAILED"

@@ -114,7 +114,7 @@ export class DiscordApiClient {
           method: "GET",
           headers: {
             Authorization: `Bot ${this.options.token}`,
-            "User-Agent": "discord-thread-export-mcp/0.1.0",
+            "User-Agent": "discord-thread-export-mcp/0.2.0",
           },
         });
       } catch (error) {
