@@ -99,8 +99,18 @@ export interface FetchMessagesResult {
   retryCount: number;
 }
 
+export interface MessageSelection {
+  after_message_id: string | null;
+  before_message_id: string | null;
+  include_boundary_messages: boolean;
+  source_message_count: number;
+  message_count: number;
+  oldest_message_at: string | null;
+  newest_message_at: string | null;
+}
+
 export interface ExportMetadata {
-  format_version: 2;
+  format_version: 3;
   status: "complete" | "incomplete";
   exported_at: string;
   guild_id: string;
@@ -112,6 +122,7 @@ export interface ExportMetadata {
   api_page_count: number;
   retry_count: number;
   warnings: string[];
+  selection: MessageSelection | null;
   error?: { code: string; message: string };
 }
 
@@ -127,5 +138,11 @@ export interface ExportSummary {
   raw_jsonl_path: string;
   markdown_path: string | null;
   metadata_path: string;
+  selected_message_count: number | null;
+  selected_jsonl_path: string | null;
+  selected_markdown_path: string | null;
+  selection_metadata_path: string | null;
+  analysis_jsonl_path: string;
+  analysis_markdown_path: string | null;
   warnings: string[];
 }

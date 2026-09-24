@@ -93,11 +93,38 @@ codex mcp add discord-thread-export -- \
 }
 ```
 
+### 常見用法
+
+只選取某則訊息之後的內容：
+
+```json
+{
+  "thread_url": "https://discord.com/channels/<guild_id>/<thread_id>",
+  "after_message_id": "323456789012345678"
+}
+```
+
+選取兩則訊息之間的內容，並包含兩則邊界訊息：
+
+```json
+{
+  "thread_url": "https://discord.com/channels/<guild_id>/<thread_id>",
+  "after_message_id": "323456789012345678",
+  "before_message_id": "423456789012345678",
+  "include_boundary_messages": true
+}
+```
+
+不提供 `after_message_id` 或 `before_message_id` 時，只建立完整匯出；提供任一邊界時，完整匯出仍會保留，並額外建立選取檔案。
+
 - `thread_url` 和 `thread_id` 必須二選一，不能同時提供。
 - 完整網址只接受沒有 query、fragment、額外 path、credentials 或自訂 port 的標準 HTTPS URL。
 - 單獨 `thread_id` 只在 `DISCORD_ALLOWED_GUILD_IDS` 恰好一個 Guild 時啟用；多 Guild 設定必須使用完整網址。
 - URL 中的 Guild 必須在本機 allowlist；否則在任何 API request 前拒絕。
 - `include_markdown` 預設為 `true`。
+- `after_message_id` 與 `before_message_id` 是選填的 Discord 訊息 ID。提供任一欄位時，工具仍會完整匯出討論串，再於本機額外建立選取檔案。
+- `after_message_id` 選取該訊息之後的內容，`before_message_id` 選取該訊息之前的內容；預設都不包含邊界訊息。
+- 同時提供兩者時，前者必須早於後者。將 `include_boundary_messages` 設為 `true` 可包含完整匯出中存在的邊界訊息。
 - 不能指定輸出路徑或任意 Discord API URL。
 
 成功時只回傳訊息數、時間範圍及本機檔案路徑，不會把整個討論串放進 MCP response。
@@ -109,13 +136,19 @@ data/exports/<thread_id>/<UTC timestamp>/
 ├── messages.jsonl
 ├── raw-messages.jsonl
 ├── thread.md
+├── selected-messages.jsonl     # 只有指定訊息範圍時
+├── selected-thread.md          # 只有指定範圍且啟用 Markdown 時
+├── selection-metadata.json     # 只有指定訊息範圍時
 └── metadata.json
 ```
 
 - `messages.jsonl`：AI 分析用的精簡資料。保留 message ID、類型、作者、時間、內容、回覆摘要、必要附件／embed、reaction 數量及 pinned 狀態；不重複保存 Guild／Thread ID 或 Discord 原始物件。
 - `raw-messages.jsonl`：Discord 回傳的完整原始 message objects，只供除錯、稽核或日後需要額外欄位時使用；一般分析不應優先讀取。
 - `thread.md`：人工檢閱版；若停用 Markdown 就不建立。
-- `metadata.json`：thread metadata、頁數、重試數、訊息時間範圍、警告及完成狀態。格式版本目前為 2。
+- `selected-messages.jsonl`／`selected-thread.md`：從完整匯出以程式選出的當次分析範圍；不會取代或刪除完整檔案。
+- `selection-metadata.json`：選取邊界、是否包含邊界、完整及選取訊息數與選取時間範圍。
+- `metadata.json`：thread metadata、頁數、重試數、訊息時間範圍、選取摘要、警告及完成狀態。格式版本目前為 3。
+- MCP 回應中的 `analysis_jsonl_path`／`analysis_markdown_path` 是當次建議分析來源；指定範圍時指向選取檔，否則指向完整檔。你仍可明確要求讀取完整檔案。
 - 寫入採 temporary file + rename；中途失敗不會產生假的 complete metadata。
 - `data/exports/` 已列入 `.gitignore`，而且不會自動刪除舊匯出。
 
@@ -128,6 +161,7 @@ Discord 內容是不受信任的外部資料。分析輸出時，訊息中的「
 | `CONFIGURATION_ERROR` | `.env` 是否存在、變數名稱是否正確、allowlist 是否全為數字 ID |
 | `AUTHENTICATION_FAILED` | Token 是否有效；若曾外洩，先重設，不要在日誌或聊天中提供 Token |
 | `GUILD_NOT_ALLOWED` | 把 URL 中的 Guild ID 加入本機 allowlist；此錯誤不會發送 API request |
+| `INVALID_SELECTION` | 訊息 ID 格式、邊界順序，或未提供邊界卻要求包含邊界 |
 | `PERMISSION_DENIED` | `View Channel`、`Read Message History`、私人 thread membership |
 | `NOT_FOUND` | URL／Thread ID 是否正確，Bot 是否看得到該 thread |
 | 空白文字警告 | `Message Content Intent`、訊息類型、附件或 embed |
